@@ -1,0 +1,338 @@
+---
+title: "Assignment 1"
+output: html_notebook
+---
+
+# Data set
+Geo Accession id: GSE152323
+
+Title: Gene expression analysis of RECQ1-regulated transcriptome in breast 
+cancer cells.
+
+
+## Q1. What are the control and test conditions of the dataset?
+In this test, the controls are MCF7 cells transfected with control siRNA and
+the tests are MCF7 cells transfected with ESR1 siRNAs (SmartPool) and RECQ1
+siRNAs (SmartPool) for 48 hours.
+
+## Q2. Why is the dataset of interest to you?
+This paper is quite new in topics relating to breast cancer, so it might provide
+some new insights in this disease.
+
+## Q3. Were there expression values that were not unique for specific genes? How did you handle these?
+Based on the summarized_gene_counts later, there is no duplicated gene
+
+## Q4. Were there expression values that could not be mapped to current HUGO symbols?
+Yes, there exits expression values that could not be mapped to HUGO symbols. 
+There are in total 718 expression values are NA or "".
+
+## Q5. How many outliers were removed?
+I do not remove any outlier.
+
+## Q6. How did you handle replicates?
+There is no replicates for my set of data.
+
+
+## Q7. What is the final coverage of your dataset?
+13526 out of 56632.
+
+## Load essential packages
+
+```{r}
+library(GEOmetadb)
+library(edgeR)
+library(biomaRt)
+library(knitr)
+```
+
+## Download the data
+```{r}
+geo_accession <- "GSE152323"
+sfiles <- NULL
+
+# Checking if the file already exists
+if (! file.exists("./GSE152323/")) {
+  sfiles <- getGEOSuppFiles(geo_accession)
+  saveRDS(sfiles, "./sfiles.rds")
+} else {
+  sfiles <- readRDS("./sfiles.rds")
+}
+
+
+fnames = rownames(sfiles)
+
+# File is separated by \t
+recq1_exp = read.delim(fnames[1], 
+                         header = TRUE, 
+                         check.names = FALSE, 
+                         sep = "\t")
+
+kable(head(recq1_exp))
+```
+
+```{r}
+dim(recq1_exp)
+
+colnames(recq1_exp)
+
+# Missing first column name
+colnames(recq1_exp)[1] <- "ensembl_id" 
+
+raw_samples_names <- unname(
+    unlist(data.frame(strsplit(colnames(recq1_exp)[2: length(colnames(recq1_exp))], 
+                               "/")))[c(TRUE, FALSE)])
+
+colnames(recq1_exp)[2: ncol(recq1_exp)] <- raw_samples_names
+
+colnames(recq1_exp)
+
+
+```
+
+## Filter low counts
+
+```{r}
+cpms = cpm(recq1_exp[, 2: ncol(recq1_exp)])
+rownames(cpms) <- recq1_exp[, 1]
+
+# there are 6 samples
+keep = rowSums(cpms > 1) >= 6
+recq1_exp_filtered = recq1_exp[keep, ]
+
+dim(recq1_exp_filtered)
+
+
+```
+
+## Assess distribution of data
+
+
+### Box plot
+```{r}
+data2plot <- log2(cpm(recq1_exp_filtered[, 2: ncol(recq1_exp_filtered)]))
+boxplot(data2plot, 
+        xlab = "Samples", 
+        ylab = "log2 CPM", 
+        las = 2, 
+        cex = 0.3, 
+        cex.lab = 0.3,
+        cex.axis = 0.5, 
+        main = "recq1 RNASeq Samples")
+
+```
+
+### Density Plot
+
+```{r}
+counts_density <- 
+  apply(log2(cpm(recq1_exp_filtered[, 2:length(colnames(recq1_exp_filtered))])),
+        2, density)
+ #calculate the limits across all the samples
+xlim <- 0; ylim <- 0
+for (i in 1:length(counts_density)) {
+  xlim <- range(c(xlim, counts_density[[i]]$x)); 
+  ylim <- range(c(ylim, counts_density[[i]]$y))
+}
+ cols <- rainbow(length(counts_density))
+ ltys <- rep(1, length(counts_density))
+ 
+ #plot the first density plot to initialize the plot
+ plot(counts_density[[1]], 
+      xlim=xlim, 
+      ylim=ylim, 
+      type="n", 
+      ylab="Smoothing density of log2-CPM", 
+      main="", cex.lab = 0.8)
+ 
+ #plot each line
+ for (i in 1:length(counts_density)) {
+   lines(counts_density[[i]], 
+         col = cols[i], 
+         lty = ltys[i])
+ }
+   
+ #create legend
+ legend("topright", colnames(data2plot), 
+ col=cols, lty=ltys, cex=0.6, 
+ border ="blue", text.col = "green4", 
+ merge = TRUE, bg = "gray90")
+```
+
+
+
+## Define groups
+```{r}
+# Group them based on different cell types
+cell_type <- unlist(strsplit(raw_samples_names, "_"))[c(FALSE, TRUE, FALSE)]
+samples <- data.frame(cell_type = cell_type)
+rownames(samples) <- colnames(recq1_exp[2: length(recq1_exp)])
+
+kable(samples, format = "html")
+```
+
+
+
+
+
+```{r}
+summarized_gene_counts <- sort(table(recq1_exp$ensembl_id), decreasing = TRUE)
+kable(head(summarized_gene_counts), format = "html")
+```
+
+
+# Map
+
+```{r}
+ensembl <- useMart("ensembl")
+datasets <- listDatasets(ensembl)
+ensembl <- useDataset("hsapiens_gene_ensembl", mart = ensembl)
+# If this line do not work, run
+# httr::set_config(httr::config(ssl_verifypeer = FALSE))
+
+```
+
+
+```{r}
+conversion_stash <- "./recq1_id_conversion.rds"
+if (file.exists(conversion_stash)) {
+  recq1_id_conversion <- readRDS(conversion_stash)
+} else {
+  recq1_id_conversion <- getBM(attributes = c("ensembl_gene_id", "hgnc_symbol"),
+                                 filters = c("ensembl_gene_id"),
+                                 values = recq1_exp_filtered$ensembl_id,
+                                 mart = ensembl)
+  saveRDS(recq1_id_conversion, conversion_stash)
+}
+```
+
+
+
+
+## Merge new identifiers
+
+```{r}
+recq1_exp_filtered_annot <- merge(recq1_id_conversion, 
+                                 recq1_exp_filtered, 
+                                 by.x = 1, 
+                                 by.y = 1, 
+                                 all.y=TRUE)
+kable(recq1_exp_filtered_annot[1:10, ], format = "html")
+```
+
+## Check and deal with missing identifiers
+
+```{r}
+missing_index <- which(is.na(recq1_exp_filtered_annot$hgnc_symbol) | 
+                         recq1_exp_filtered_annot$hgnc_symbol == "")
+num_missing <- sum(is.na(recq1_exp_filtered_annot$hgnc_symbol) | 
+                         recq1_exp_filtered_annot$hgnc_symbol == "")
+
+num_missing
+
+# After checking most of genes, they are mostly deprecated or curated, thus, I use
+# their gene id as their name.
+
+ensembl_id_missing_gene <- recq1_exp_filtered_annot[missing_index, ]
+recq1_exp_filtered_annot$hgnc_symbol[missing_index] <- 
+  recq1_exp_filtered_annot$ensembl_gene_id[missing_index]
+
+
+```
+
+
+
+## Check duplicated mapping
+```{r}
+summarized_mapping_counts <- sort(table(recq1_exp_filtered_annot$hgnc_symbol), 
+                                  decreasing = TRUE)
+head(summarized_mapping_counts)
+summarized_mapping_counts_2 <- sort(table(
+  recq1_exp_filtered_annot$ensembl_gene_id), decreasing = TRUE)
+head(summarized_mapping_counts_2)
+```
+
+### Applying Normalization (TMM)
+
+```{r}
+filtered_data_matrix <- as.matrix(recq1_exp_filtered_annot[,3: ncol(recq1_exp_filtered_annot)])
+rownames(filtered_data_matrix) <- recq1_exp_filtered_annot$hgnc_symbol
+d = DGEList(counts = filtered_data_matrix, group = samples$cell_type)
+d = calcNormFactors(d) 
+normalized_counts <- cpm(d)
+kable(normalized_counts[1: 10, ], format = "html")
+nrow(normalized_counts)
+```
+
+### MDS plot
+```{r}
+plotMDS(d, labels=rownames(samples),
+ col = c("darkgreen","blue")[factor(samples$cell_type)], cex = 0.6)
+
+```
+
+
+
+```{r}
+# density plot after normalized by defined groups
+counts_density <- apply(log2(normalized_counts), 2, density)
+
+xlim <- 0; ylim <- 0
+for (i in 1:length(counts_density)) {
+  xlim <- range(c(xlim, counts_density[[i]]$x)); 
+  ylim <- range(c(ylim, counts_density[[i]]$y))
+}
+ cols <- rainbow(length(counts_density))
+ ltys <- rep(1, length(counts_density))
+ 
+ #plot the first density plot to initialize the plot
+ plot(counts_density[[1]], 
+      xlim=xlim, 
+      ylim=ylim, 
+      type="n", 
+      ylab="Smoothing density of log2-CPM", 
+      main="Density Plot after Normalization", 
+      cex.lab = 0.8)
+ #plot each line
+ for (i in 1:length(counts_density)) {
+   lines(counts_density[[i]], 
+         col = cols[i], 
+         lty = ltys[i])
+ }
+   
+ #create legend
+ legend("topright", colnames(data2plot), 
+        col=cols, lty=ltys, cex=0.5, 
+        border ="blue", text.col = "green4", 
+        merge = TRUE, bg = "gray90")
+```
+### Dispersion
+```{r}
+model_design <- model.matrix(~samples$cell_type+0)
+d <- estimateDisp(d, model_design)
+```
+
+```{r}
+plotBCV(d,col.tagwise = "black",col.common = "red",)
+
+```
+```{r}
+plotMeanVar(d, show.raw.vars = TRUE, show.tagwise.vars=TRUE, 
+ show.ave.raw.vars = TRUE, 
+ NBline=TRUE,
+ show.binned.common.disp.vars = TRUE)
+```
+ 
+ # Final Result
+```{r}
+kable(normalized_counts[1: 10, ], type = "html")
+write.csv(normalized_counts, file = "./normalized_counts.csv")
+```
+
+# Reference
+Li, X.L., Lu, X., Parvathaneni, S., Bilke, S., Zhang, H., Thangavel, S., Vindigni, A., Hara, T., Zhu, Y., Meltzer, P.S., Lal, A., Sharma, S., 2014. Identification of RECQ1-regulated transcriptome uncovers a role of RECQ1 in regulation of cancer cell migration and invasion. Cell Cycle 13, 2431–2445.. doi:10.4161/cc.29419
+
+Steipe, B. (n.d.). GEO2R - “A B C”. from
+https://bcb420-2022.github.io/Bioinfo_Basics/de-genes.html#geo2r.
+
+
+

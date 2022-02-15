@@ -39,6 +39,24 @@ There is no replicates for my set of data.
 ## Load essential packages
 
 ```{r}
+if (!requireNamespace("BiocManager", quietly = TRUE))
+  install.packages("BiocManager")
+
+if (!requireNamespace("GEOquery", quietly = TRUE))
+  BiocManager::install("GEOquery")
+
+if (!requireNamespace("edgeR", quietly = TRUE))
+  BiocManager::install("edgeR")
+
+if (!requireNamespace("biomaRt", quietly = TRUE))
+  BiocManager::install("biomaRt")
+
+if (!requireNamespace("knitr", quietly = TRUE))
+  install.packages("knitr")
+```
+
+
+```{r}
 library(GEOmetadb)
 library(edgeR)
 library(biomaRt)

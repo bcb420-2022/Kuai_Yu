@@ -1,7 +1,10 @@
 ---
 title: "Assignment 1"
-output: html_notebook
+output:
+  html_document:
+    df_print: paged
 ---
+### Kuai Yu; 1004801912
 
 # Data set
 Geo Accession id: GSE152323
@@ -10,30 +13,30 @@ Title: Gene expression analysis of RECQ1-regulated transcriptome in breast
 cancer cells.
 
 
-## Q1. What are the control and test conditions of the dataset?
+### Q1. What are the control and test conditions of the dataset?
 In this test, the controls are MCF7 cells transfected with control siRNA and
 the tests are MCF7 cells transfected with ESR1 siRNAs (SmartPool) and RECQ1
 siRNAs (SmartPool) for 48 hours.
 
-## Q2. Why is the dataset of interest to you?
+### Q2. Why is the dataset of interest to you?
 This paper is quite new in topics relating to breast cancer, so it might provide
 some new insights in this disease.
 
-## Q3. Were there expression values that were not unique for specific genes? How did you handle these?
+### Q3. Were there expression values that were not unique for specific genes? How did you handle these?
 Based on the summarized_gene_counts later, there is no duplicated gene
 
-## Q4. Were there expression values that could not be mapped to current HUGO symbols?
+### Q4. Were there expression values that could not be mapped to current HUGO symbols?
 Yes, there exits expression values that could not be mapped to HUGO symbols. 
 There are in total 718 expression values are NA or "".
 
-## Q5. How many outliers were removed?
+### Q5. How many outliers were removed?
 I do not remove any outlier.
 
-## Q6. How did you handle replicates?
+### Q6. How did you handle replicates?
 There is no replicates for my set of data.
 
 
-## Q7. What is the final coverage of your dataset?
+### Q7. What is the final coverage of your dataset?
 13526 out of 56632.
 
 ## Load essential packages
@@ -63,7 +66,7 @@ library(biomaRt)
 library(knitr)
 ```
 
-## Download the data
+# Download the data
 ```{r}
 geo_accession <- "GSE152323"
 sfiles <- NULL
@@ -85,7 +88,7 @@ recq1_exp = read.delim(fnames[1],
                          check.names = FALSE, 
                          sep = "\t")
 
-kable(head(recq1_exp))
+kable(head(recq1_exp), type = "html")
 ```
 
 ```{r}
@@ -96,6 +99,7 @@ colnames(recq1_exp)
 # Missing first column name
 colnames(recq1_exp)[1] <- "ensembl_id" 
 
+# Also names of samples are too long
 raw_samples_names <- unname(
     unlist(data.frame(strsplit(colnames(recq1_exp)[2: length(colnames(recq1_exp))], 
                                "/")))[c(TRUE, FALSE)])
@@ -122,10 +126,10 @@ dim(recq1_exp_filtered)
 
 ```
 
-## Assess distribution of data
+# Assess distribution of data
 
 
-### Box plot
+## Box plot
 ```{r}
 data2plot <- log2(cpm(recq1_exp_filtered[, 2: ncol(recq1_exp_filtered)]))
 boxplot(data2plot, 
@@ -139,7 +143,7 @@ boxplot(data2plot,
 
 ```
 
-### Density Plot
+## Density Plot
 
 ```{r}
 counts_density <- 
@@ -160,7 +164,8 @@ for (i in 1:length(counts_density)) {
       ylim=ylim, 
       type="n", 
       ylab="Smoothing density of log2-CPM", 
-      main="", cex.lab = 0.8)
+      main="Density Plot before Normalization", 
+      cex.lab = 0.8)
  
  #plot each line
  for (i in 1:length(counts_density)) {
@@ -191,22 +196,22 @@ kable(samples, format = "html")
 
 
 
-
+## Checking duplicated genes
 ```{r}
 summarized_gene_counts <- sort(table(recq1_exp$ensembl_id), decreasing = TRUE)
 kable(head(summarized_gene_counts), format = "html")
+
+# There is no dupliacted genes
 ```
 
 
 # Map
 
 ```{r}
+httr::set_config(httr::config(ssl_verifypeer = FALSE)) # sometimes code bellow runs error, this line solves it
 ensembl <- useMart("ensembl")
 datasets <- listDatasets(ensembl)
 ensembl <- useDataset("hsapiens_gene_ensembl", mart = ensembl)
-# If this line do not work, run
-# httr::set_config(httr::config(ssl_verifypeer = FALSE))
-
 ```
 
 
@@ -234,7 +239,7 @@ recq1_exp_filtered_annot <- merge(recq1_id_conversion,
                                  by.x = 1, 
                                  by.y = 1, 
                                  all.y=TRUE)
-kable(recq1_exp_filtered_annot[1:10, ], format = "html")
+kable(recq1_exp_filtered_annot[1:10, ], type = "html")
 ```
 
 ## Check and deal with missing identifiers
@@ -245,16 +250,16 @@ missing_index <- which(is.na(recq1_exp_filtered_annot$hgnc_symbol) |
 num_missing <- sum(is.na(recq1_exp_filtered_annot$hgnc_symbol) | 
                          recq1_exp_filtered_annot$hgnc_symbol == "")
 
-num_missing
+num_missing # Print number of missing identifier
 
-# After checking most of genes, they are mostly deprecated or curated, thus, I use
-# their gene id as their name.
+# After checking most of genes, they are mostly deprecated or curated; thus, I use
+# their gene id as their name since they might be useful.
 
 ensembl_id_missing_gene <- recq1_exp_filtered_annot[missing_index, ]
 recq1_exp_filtered_annot$hgnc_symbol[missing_index] <- 
   recq1_exp_filtered_annot$ensembl_gene_id[missing_index]
 
-
+kable(recq1_exp_filtered_annot[missing_index[1: 10], ], type = "html")
 ```
 
 
@@ -267,6 +272,8 @@ head(summarized_mapping_counts)
 summarized_mapping_counts_2 <- sort(table(
   recq1_exp_filtered_annot$ensembl_gene_id), decreasing = TRUE)
 head(summarized_mapping_counts_2)
+
+# There is no duplicated mapping in either way
 ```
 
 ### Applying Normalization (TMM)
@@ -277,7 +284,7 @@ rownames(filtered_data_matrix) <- recq1_exp_filtered_annot$hgnc_symbol
 d = DGEList(counts = filtered_data_matrix, group = samples$cell_type)
 d = calcNormFactors(d) 
 normalized_counts <- cpm(d)
-kable(normalized_counts[1: 10, ], format = "html")
+kable(normalized_counts[1: 10, ], type = "html")
 nrow(normalized_counts)
 ```
 
@@ -330,20 +337,23 @@ d <- estimateDisp(d, model_design)
 ```
 
 ```{r}
-plotBCV(d,col.tagwise = "black",col.common = "red",)
+plotBCV(d,col.tagwise = "black",col.common = "red")
 
 ```
 ```{r}
-plotMeanVar(d, show.raw.vars = TRUE, show.tagwise.vars=TRUE, 
- show.ave.raw.vars = TRUE, 
- NBline=TRUE,
- show.binned.common.disp.vars = TRUE)
+plotMeanVar(d, show.raw.vars = TRUE, 
+            show.tagwise.vars=TRUE, 
+            show.ave.raw.vars = TRUE, 
+            NBline=TRUE,
+            show.binned.common.disp.vars = TRUE)
 ```
  
- # Final Result
+# Final Result
 ```{r}
-kable(normalized_counts[1: 10, ], type = "html")
-write.csv(normalized_counts, file = "./normalized_counts.csv")
+final_counts <- data.frame(ensembl_gene_id = recq1_exp_filtered_annot$ensembl_gene_id)
+final_counts <- cbind(final_counts, as.data.frame(normalized_counts))
+kable(final_counts[1: 10, ], type = "html")
+write.csv(final_counts, file = "./final_counts.csv")
 ```
 
 # Reference
@@ -352,5 +362,10 @@ Li, X.L., Lu, X., Parvathaneni, S., Bilke, S., Zhang, H., Thangavel, S., Vindign
 Steipe, B. (n.d.). GEO2R - “A B C”. from
 https://bcb420-2022.github.io/Bioinfo_Basics/de-genes.html#geo2r.
 
+Robinson MD, McCarthy DJ and Smyth GK , 2010. edgeR: a Bioconductor package for differential expression analysis of digital gene expression data.
+  Bioinformatics 26, 139-140
 
+Davis, S. and Meltzer, P. S, 2007, GEOquery: a bridge between the Gene Expression Omnibus (GEO) and BioConductor. Bioinformatics, 14, 1846-1847
 
+Steffen Durinck, Paul T. Spellman, Ewan Birney and
+  Wolfgang Huber. 2009 Mapping identifiers for the integration of genomic datasets with the R/Bioconductor package biomaRt. , Nature Protocols 4, 1184-1191.

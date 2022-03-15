@@ -1,0 +1,526 @@
+---
+title: "BCB420 Assignment 2 Differential Gene Expression & Thresholded over-representation analysis"
+author: "Kuai Yu"
+output:
+  html_document:
+    df_print: paged
+    toc: true
+    toc_depth: 3
+bibliography: assignment2.bib
+---
+
+# Introduction
+In this notebook, I am going to perform differential gene expression analysis and
+overrepresentation analysis on noramlized data from assignment 1. The original data
+is RNAseq raw counts. The controls are MCF7 cells transfected with control siRNA and
+the tests are MCF7 cells transfected with ESR1 siRNAs (SmartPool) and RECQ1
+siRNAs (SmartPool) for 48 hours [@lu2021genome]. In the original paper, they perform gene expression analysis and
+overrepresentation analysis on ESR1 vs control and RECQ1 vs control to study relation
+between RECQ1 and ESR1. Also, they are interested in finding relation between 
+RECQ1 and breast cancer.
+
+
+# Initial Setup
+## check package is installed
+```{r message=FALSE, warning=FALSE, results='hide'}
+if (!requireNamespace("ComplexHeatmap", quietly = TRUE))
+  BiocManager::install("ComplexHeatmap")
+if (!requireNamespace("circlize", quietly = TRUE))
+  install.packages("circlize")
+if (!requireNamespace("gprofiler2", quietly = TRUE))
+  install.packages("gprofiler2")
+if (!requireNamespace("kableExtra", quietly = TRUE))
+  install.packages("kableExtra")
+```
+
+## Load package
+```{r message=FALSE, warning=FALSE, results='hide'}
+library(edgeR)
+library(circlize)
+library(ComplexHeatmap)
+library(gprofiler2)
+library(kableExtra)
+```
+
+
+## Load data
+Please modify the normalized_count_data_path since the file in github is in
+another location
+```{r}
+# Read data from assignment 1
+
+normalized_count_data_path <- "./final_counts.csv"
+
+# Please modify the datapath
+normalized_count_data <- read.table(normalized_count_data_path, 
+                                    header = TRUE, 
+                                    sep = ",", 
+                                    stringsAsFactors = FALSE, 
+                                    check.names = FALSE)
+
+# Find missing column names for hgnc_symbol
+colnames(normalized_count_data)[1] <- "hgnc_symbol"
+
+# Make a martix from normalized data
+data_matrix <- normalized_count_data[3: ncol(normalized_count_data)]
+rownames(data_matrix) <- normalized_count_data$hgnc_symbol
+colnames(data_matrix) <- colnames(normalized_count_data[3: ncol(normalized_count_data)])
+```
+
+```{r}
+# Group them based on different cell types
+cell_type <- unlist(strsplit(colnames(normalized_count_data[3: ncol(normalized_count_data)]), "_"))[c(FALSE, TRUE, FALSE)]
+samples <- data.frame(cell_type = cell_type)
+rownames(samples) <- colnames(normalized_count_data[3: ncol(normalized_count_data)])
+
+```
+
+```{r}
+# Define model
+classes <- samples$cell_type
+model_design <- model.matrix(~0 + classes )
+```
+
+
+# Differential Gene Expression
+
+In the original paper, author conducts two differential Gene Expression analysis,
+one is RecQ1 vs CTL, the other is ESR1 vs CTL. Here, I am going to conduct these
+two differential Gene Expression analysis. I use Quasi liklihood model for 
+differential expression analysis since it is recommended for bulk rna-seq data and
+my data is in negative bionomial distribution.
+
+```{r}
+contrast_RecQ1CTL <- makeContrasts(
+  RecQ1CTL ="classessiRecQ1-classessiCTL",
+  levels=model_design)
+
+contrast_ESR1 <- makeContrasts(
+  ESR1CTL ="classessiESR1-classessiCTL",
+  levels=model_design)
+
+```
+
+## Differential Gene Expression between RecQ1 knockdown and control
+First, differential Gene Expression analysis of RecQ1 vs CTL will be conducted 
+first
+```{r}
+d = DGEList(counts=data_matrix, group=samples$cell_type)
+plotMDS(d, labels=rownames(samples),
+ col = c("darkgreen","blue")[factor(samples$cell_type)], cex = 0.6, main = "MDS plot")
+d <- estimateDisp(d, model_design)
+fit <- glmQLFit(d, model_design)
+qlf.RecQ1CTL <- glmQLFTest(fit, 
+                        contrast = contrast_RecQ1CTL
+                        )
+```
+### Multiple hypothesis testing
+For every gene, I correct them using Benjamini-Hochberg [@benjamini1995controlling], also known as fdr. I use 
+this method because it is a powerful tool that decreases the false discovery rate
+and it is a common method for multiple hypothesis testing. 
+
+```{r}
+
+# adjust methods
+qlf_output_hits_RecQ1CTL <- topTags(qlf.RecQ1CTL,
+                           sort.by = "PValue",
+                           n = nrow(normalized_count_data), 
+                           adjust.method = "BH") 
+```
+
+### threshold
+After that, I used cutoff of 0.05 for pvalue and fdr. This is because pvalue < 0.05 
+is statistically significant and it is a commonly used statistic threshold.
+```{r}
+length(which(qlf_output_hits_RecQ1CTL$table$PValue < 0.05))
+length(which(qlf_output_hits_RecQ1CTL$table$FDR < 0.05))
+
+```
+
+
+### HeatMap
+I use HeatMap to visualize the expression. From the result, we can see samples
+from each conditions cluster and the difference in expression is very apparent. 
+
+```{r}
+top_hits <- rownames(qlf_output_hits_RecQ1CTL$table)[
+ qlf_output_hits_RecQ1CTL$table$PValue < 0.05]
+heatmap_matrix_tophits <- t(
+ scale(t(data_matrix[which(rownames(data_matrix) 
+ %in% top_hits),])))
+heatmap_matrix_tophits <- heatmap_matrix_tophits[,! colnames(heatmap_matrix_tophits) %in% c("Sample_siESR1_3",  "Sample_siESR1_1", "Sample_siESR1_2")]
+if(min(heatmap_matrix_tophits) == 0){
+  heatmap_col = colorRamp2(c( 0, max(heatmap_matrix_tophits)), 
+                           c( "white", "red"))
+} else {
+  heatmap_col = colorRamp2(c(min(heatmap_matrix_tophits), 0, 
+                             max(heatmap_matrix_tophits)), 
+                           c("blue", "white", "red"))
+}
+
+
+ha_colours <- c("blue","red")
+siCTLsiRecQ1classes <- unique(classes)
+siCTLsiRecQ1classes <- siCTLsiRecQ1classes[siCTLsiRecQ1classes != "siESR1"]
+names(ha_colours) <- unique(siCTLsiRecQ1classes)
+ha <- HeatmapAnnotation(df=data.frame(
+  type = classes[classes != "siESR1"]),
+  col = list(type = ha_colours))
+
+current_heatmap <- Heatmap(as.matrix(heatmap_matrix_tophits),
+                           cluster_rows = TRUE,
+                           cluster_columns = TRUE,
+                           show_row_dend = TRUE,
+                           show_column_dend = TRUE, 
+                           col = heatmap_col,
+                           show_column_names = TRUE, 
+                           show_row_names = FALSE,
+                           show_heatmap_legend = TRUE,
+                           top_annotation = ha,
+                           name = "Gene Expression for CTL vs RecQ1"
+                          )
+plot(current_heatmap)
+```
+
+### Volcano Plot
+I use volcano plot to visualize amount of differentially expressed genes.
+We can see that most of them are downregulated genes
+```{r}
+volcano_data <- cbind(qlf_output_hits_RecQ1CTL$table$logFC, -log10(qlf_output_hits_RecQ1CTL$table$FDR))
+colnames(volcano_data) <- c("logFC", "negative Log P-value")
+degs <- qlf_output_hits_RecQ1CTL$table$FDR < 0.05 & abs(qlf_output_hits_RecQ1CTL$table$logFC) > 1
+point.col <- ifelse(degs, "red", "black")
+plot(volcano_data, 
+     pch = 16, 
+     col = point.col, 
+     cex = 0.5,
+     main = "Volcano Plot for Differentially Expressed Genes in RecQ1 vs CTL")
+
+```
+
+
+## Differential Gene Expression between ESR1 knockdown and control
+### Multiple hypothesis testing
+```{r}
+qlf.ESR1CTL <- glmQLFTest(fit, 
+                        contrast = contrast_ESR1
+                        )
+
+qlf_output_hits_ESR1CTL <- topTags(qlf.ESR1CTL,
+                           sort.by = "PValue",
+                           n = nrow(normalized_count_data), 
+                           adjust.method = "BH") 
+```
+
+### Threshold
+```{r}
+length(which(qlf_output_hits_ESR1CTL$table$PValue < 0.05))
+length(which(qlf_output_hits_ESR1CTL$table$FDR < 0.05))
+```
+
+### Heatmap
+I use HeatMap to visualize the expression . From the result, we can see samples
+from each conditions cluster and the difference in expression is even more apparent
+than the one in RECQ1 vs CTL. 
+```{r}
+top_hits <- rownames(qlf_output_hits_ESR1CTL$table)[
+ qlf_output_hits_ESR1CTL$table$PValue < 0.05]
+heatmap_matrix_tophits <- t(
+ scale(t(data_matrix[which(rownames(data_matrix) 
+ %in% top_hits),])))
+heatmap_matrix_tophits <- heatmap_matrix_tophits[,! colnames(heatmap_matrix_tophits) %in% c("Sample_siRecQ1_3",  "Sample_siRecQ1_1", "Sample_siRecQ1_2")]
+if(min(heatmap_matrix_tophits) == 0){
+  heatmap_col = colorRamp2(c( 0, max(heatmap_matrix_tophits)), 
+                           c( "white", "red"))
+} else {
+  heatmap_col = colorRamp2(c(min(heatmap_matrix_tophits), 0, 
+                             max(heatmap_matrix_tophits)), 
+                           c("blue", "white", "red"))
+}
+
+
+ha_colours <- c("green","blue")
+siCTLsiESR1classes <- unique(classes)
+siCTLsiESR1classes <- siCTLsiESR1classes[siCTLsiESR1classes != "siRecQ1"]
+names(ha_colours) <- unique(siCTLsiESR1classes)
+ha <- HeatmapAnnotation(df=data.frame(
+  type = classes[classes != "siRecQ1"]),
+  col = list(type = ha_colours))
+
+current_heatmap <- Heatmap(as.matrix(heatmap_matrix_tophits),
+                           cluster_rows = TRUE,
+                           cluster_columns = TRUE,
+                           show_row_dend = TRUE,
+                           show_column_dend = TRUE, 
+                           col = heatmap_col,
+                           show_column_names = TRUE, 
+                           show_row_names = FALSE,
+                           show_heatmap_legend = TRUE,
+                           top_annotation = ha,
+                           name = "Gene Expression for CTL vs ESR1")
+plot(current_heatmap)
+
+```
+### Volano plot
+```{r}
+volcano_data <- cbind(qlf_output_hits_ESR1CTL$table$logFC, -log10(qlf_output_hits_ESR1CTL$table$FDR))
+colnames(volcano_data) <- c("logFC", "negative Log P-value")
+degs <- qlf_output_hits_ESR1CTL$table$FDR < 0.05 & abs(qlf_output_hits_ESR1CTL$table$logFC) > 1
+point.col <- ifelse(degs, "red", "black")
+plot(volcano_data, 
+     pch = 16, 
+     col = point.col, 
+     cex = 0.5,
+     main = "Volcano Plot for Differentially Expressed Genes in ESR1 vs CTL")
+```
+
+
+
+## Prepare gene_list for Thresholded over-representation analysis
+```{r}
+RecQ1CTL_top <- qlf_output_hits_RecQ1CTL$table[which(qlf_output_hits_RecQ1CTL$table$PValue < 0.05),]
+RecQ1CTL_gene_list <- rownames(qlf_output_hits_RecQ1CTL$table[which(qlf_output_hits_RecQ1CTL$table$PValue < 0.05),])
+
+ESR1CTL_top <- qlf_output_hits_ESR1CTL$table[which(qlf_output_hits_ESR1CTL$table$PValue < 0.05),]
+ESR1CTL_gene_list <- rownames(qlf_output_hits_ESR1CTL$table[which(qlf_output_hits_ESR1CTL$table$PValue < 0.05),])
+
+```
+
+
+
+# Thresholded over-representation analysis
+
+For Thresholded over-representation analysis, I am going to use g:Profiler [@reimand2016g]. I use
+this tool because it is easy to use and incorporate many annotation data. I am 
+going to use gprofiler2, the R client of gprofiler to conduct enrichment analysis.
+
+The data source that I used are "Reactome"[@fabregat2018reactome] and "WikiPathways"[@martens2021wikipathways].
+I used these data source because I am looking for some specific pathways associated
+with ESR1, estrogen and breast cancer. Data source like GO:BP, GO:MF [@gene2004gene] contains 
+molecular-level activities, which do not suits my needs. According to G:Profiler,
+the version of WikiPathways is 20211210 and Reactome is annotations: BioMart classes: 2022-1-3
+
+## Thresholded over-representation analysis for RecQ1 vs CTL
+First, I will run g:Profiler for RecQ1 vs CTL with the all differentially 
+expressed genes together and the up-regulated and down regulated differentially 
+expressed genes separately
+
+
+### All differentially expressed genes together
+Run gprofiler with parameters of correction method of FDR threshold of 0.05,
+Then I get 35 significant pathways
+```{r warning=FALSE}
+RecQ1CTL_gostres <- gost(query = RecQ1CTL_gene_list,
+                organism = "hsapiens",
+                correction_method = "fdr",
+                user_threshold = 0.05,
+                sources = c("REAC", "WP"))
+
+RecQ1CTL_enrichment_result <- RecQ1CTL_gostres$result
+RecQ1CTL_enrichment_result <- RecQ1CTL_enrichment_result[RecQ1CTL_enrichment_result$term_size < 500, ]
+nrow(RecQ1CTL_enrichment_result)
+```
+
+In the enrichment result, we can see Extra-nuclear estrogen signaling and 
+ESR-mediated signaling are significantly expressed marked in yellow. 
+Thus, knock-down of RECQ1 correlates with expression of estrogen signaling 
+and ESR.
+
+```{r}
+elements <-  c("precision", "recall", "term_id", "source", "term_name")
+kable(RecQ1CTL_enrichment_result[RecQ1CTL_enrichment_result$source == "REAC", elements][1: 10, ], 
+      type = "html",
+      caption = "Table 1. Reactome Genesets for all genes in RECQ1 vs CTL") %>%
+  row_spec(c(1, 7), background = "yellow")
+
+```
+```{r}
+kable(RecQ1CTL_enrichment_result[RecQ1CTL_enrichment_result$source == "WP", elements][1:15,], 
+      format = "html",
+      caption = "Table 2. WikiPathways Genesets for all genes in RECQ1 vs CTL") %>%
+  row_spec(c(5, 15), background = "yellow")
+```
+
+
+
+### up-regulated and down regulated differentially expressed genes
+Run gprofiler with same parameters,
+Then I get 16 significant pathways
+
+#### up-regulated differentially expressed genes
+```{r warning=FALSE}
+RecQ1CTL_top_up <- RecQ1CTL_top[RecQ1CTL_top$logFC > 0, ]
+RecQ1CTL_up_genelist <- rownames(RecQ1CTL_top_up)
+RecQ1CTL_up_gostres <- gost(query = RecQ1CTL_up_genelist,
+                organism = "hsapiens",
+                correction_method = "fdr",
+                user_threshold = 0.05,
+                sources = c("REAC", "WP"))
+RecQ1CTL_up_enrichment_result <- RecQ1CTL_up_gostres$result
+nrow(RecQ1CTL_up_gostres$result)
+```
+There are not much interesting hits for upregulated genes
+```{r}
+kable(RecQ1CTL_up_enrichment_result[RecQ1CTL_up_enrichment_result$source == "REAC", elements],
+      format = "html",
+      caption = "Table 3. Reactome Genesets for all Upregulated genes in RECQ1 vs CTL")
+```
+
+```{r}
+kable(RecQ1CTL_up_enrichment_result[RecQ1CTL_up_enrichment_result$source == "WP", elements],
+      format = "html",
+      caption = "Table 4. WikiPathways Genesets for all Upregulated genes in RECQ1 vs CTL")
+```
+
+#### down-regulated differentially expressed genes
+Run gprofiler with parameters of correction method of FDR threshold of 0.05,
+Then I get 23 significant pathways
+```{r warning=FALSE}
+RecQ1CTL_top_down <- RecQ1CTL_top[RecQ1CTL_top$logFC < 0, ]
+RecQ1CTL_down_genelist <- rownames(RecQ1CTL_top_down)
+RecQ1CTL_down_gostres <- gost(query = RecQ1CTL_down_genelist,
+                organism = "hsapiens",
+                correction_method = "fdr",
+                user_threshold = 0.05,
+                sources = c("REAC", "WP"))
+RecQ1CTL_down_enrichment_result <- RecQ1CTL_down_gostres$result
+nrow(RecQ1CTL_down_enrichment_result)
+```
+
+All of important pathways we interested are found in the down-regulation.
+```{r}
+kable(RecQ1CTL_down_enrichment_result[RecQ1CTL_down_enrichment_result$source == "REAC", elements][1:11, ], 
+      format = "html",
+      caption = "Table 5. WikiPathways Genesets for all Downregulated genes in RECQ1 vs CTL") %>%
+  row_spec(c(1, 11), background = "yellow")
+```
+
+```{r}
+kable(RecQ1CTL_down_enrichment_result[RecQ1CTL_down_enrichment_result$source == "WP", elements], 
+      format = "html",
+      caption = "Table 6. WikiPathways Genesets for all Downregulated genes in RECQ1 vs CTL") %>%
+  row_spec(c(4, 5), background = "yellow")
+```
+
+## Thresholded over-representation analysis for ESR1 vs CTL
+
+Additionally, I will run g:Profiler for ESR1 vs CTL with the all differentially 
+expressed genes together and the up-regulated and down regulated differentially 
+expressed genes separately
+
+
+### All differentially expressed genes together
+We found same genesets in RECQ1 knockdown marked in yellow
+```{r warning=FALSE}
+ESR1CTL_gostres <- gost(query = ESR1CTL_gene_list,
+                organism = "hsapiens",
+                correction_method = "fdr",
+                user_threshold = 0.05,
+                sources = c("REAC", "WP"))
+
+ESR1CTL_enrichment_result <- ESR1CTL_gostres$result
+ESR1CTL_enrichment_result <- ESR1CTL_enrichment_result[ESR1CTL_enrichment_result$term_size < 500, ]
+nrow(RecQ1CTL_enrichment_result)
+```
+
+```{r}
+elements <-  c("precision", "recall", "term_id", "source", "term_name")
+kable(ESR1CTL_enrichment_result[ESR1CTL_enrichment_result$source == "REAC", elements][1:10, ],
+      format = "html",
+      caption = "Table 7. Reactome Genesets for all genes in ESR1 vs CTL")
+
+```
+
+```{r}
+kable(ESR1CTL_enrichment_result[ESR1CTL_enrichment_result$source == "WP", elements][1: 10, ], 
+      format = "html",
+      caption = "Table 8. WikiPathways Genesets for all genes in ESR1 vs CTL") %>%
+  row_spec(c(4, 6), background = "yellow")
+```
+
+
+### up-regulated and down regulated differentially expressed genes
+Up-regulated genes are not that useful since author do not discuss about it much.
+#### up-regulated differentially expressed genes
+```{r warning=FALSE}
+ESR1CTL_top_up <- ESR1CTL_top[ESR1CTL_top$logFC > 0, ]
+ESR1CTL_up_genelist <- rownames(ESR1CTL_top_up)
+ESR1CTL_up_gostres <- gost(query = ESR1CTL_up_genelist,
+                organism = "hsapiens",
+                correction_method = "fdr",
+                user_threshold = 0.05,
+                sources = c("REAC", "WP"))
+ESR1CTL_up_enrichment_result <- ESR1CTL_up_gostres$result[ESR1CTL_up_gostres$result$term_size < 500, ]
+nrow(ESR1CTL_up_enrichment_result)
+```
+
+```{r}
+kable(ESR1CTL_up_enrichment_result[ESR1CTL_up_enrichment_result$source == "REAC", elements][1:10,],
+      format = "html",
+      caption = "Table 9. Reactome Genesets for all Upregulated genes in ESR1 vs CTL")
+```
+
+```{r}
+kable(ESR1CTL_up_enrichment_result[ESR1CTL_up_enrichment_result$source == "WP", elements][1:10,],
+      format = "html",
+      caption = "Table 10. WikiPathways Genesets for all Upregulated genes in ESR1 vs CTL")
+```
+
+
+#### down-regulated differentially expressed genes
+```{r warning=FALSE}
+ESR1CTL_top_down <- ESR1CTL_top[ESR1CTL_top$logFC < 0, ]
+ESR1CTL_down_genelist <- rownames(ESR1CTL_top_down)
+ESR1CTL_down_gostres <- gost(query = ESR1CTL_down_genelist,
+                organism = "hsapiens",
+                correction_method = "fdr",
+                user_threshold = 0.05,
+                sources = c("REAC", "WP"))
+ESR1CTL_down_enrichment_result <- ESR1CTL_down_gostres$result
+nrow(ESR1CTL_down_enrichment_result)
+```
+
+
+Here, we found several same pathways we found in the RECQ1 vs CTL.
+```{r}
+kable(ESR1CTL_down_enrichment_result[ESR1CTL_down_enrichment_result$source == "REAC", elements][1:10, ], 
+      format = "html",
+      caption = "Table 11. Reactome Genesets for all Downregulated genes in ESR1 vs CTL") %>%
+  row_spec(c(2, 7), background = "yellow")
+```
+
+```{r}
+kable(ESR1CTL_down_enrichment_result[ESR1CTL_down_enrichment_result$source == "WP", elements][1:10, ], 
+      format = "html",
+      caption = "Table 12. WikiPathways Genesets for all Downregulated genes in ESR1 vs CTL") %>%
+  row_spec(c(3, 6), background = "yellow")
+```
+
+# Interpretation
+
+This over-representation results support the conclusion discussed in the original
+paper. In the original paper, author states that RECQ1 regulates ERa signalling[@lu2021genome].
+Here, in my analysis, ESR-mediated signaling is down-regulated when RECQ1 is 
+knocked down. Since ESR1 encodes ERa, we have evidence to say RECQ1 regulates 
+ERa signalling. What's more, author also points out that RECQ1 depletion 
+causes downregulation of gene sets associated with estrogen
+response. In my analysis, Extra-nuclear estrogen signaling and Mammary gland 
+development pathway is down-regulated when RECQ1 is knocked down. This provides 
+another supporting evidence for relation between RECQ1 and estrogen. Also, author
+states that many genes downregulated in ESR1 knockdown are not downregulated in
+RECQ1 knockdown since RECQ1 could regulate only parts of ERa targets. This is also
+observed in my analysis. They share many of the pathways like Mammary gland 
+development pathway, but ESR1 knockdown has far more downregulated genesets. 
+
+There are some evidence that support my results.First, we see Cholesterol 
+biosynthesis and Cholesterol biosynthesis pathway is downregulated when ESR1 is
+knocked down. There are evidence [@klos2008esr1] showing that variation of ESR1 
+influence HDL-cholesterol. Moreover, vitamin D receptoris upregulated when 
+ESR1 is knocked down. There is also evidence that ESR1 is one of the 
+regulators for vitamin D3 receptors[landel2016vitamin]. In their paper, they 
+point out that ESR1 induce signal pathway of vitamin D supplementation against
+Alzheimer’s disease.
+
+
+# Reference
+

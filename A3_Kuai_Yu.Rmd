@@ -151,7 +151,7 @@ we get genesets relating to elastic fibre such as REAC:R-HSA-2129379, notch proc
 REAC:R-HSA-1912422. In downregulation, we get genesets relating to translation such 
 as R-HSA-192823, R-HSA-156902, R-HSA-72764, R-HSA-156842
 
-#  Visualize your Gene set Enrichment Analysis in Cytoscape
+#  Visualize your Gene set Enrichment Analysis using Enrichment Map [@merico2010enrichment]
 For ESR1 vs CTL, there are 50 nodes and 406 edges, for RECQ1 vs CTL, there are 273 nodes and 6469 edges
 They are both run with p-value cutoff of 0.05 and combined 50% similarity coefficient with a cutoff of 0.375.
 ![Default layout of ESR1 vs CTL](./figures/ESR1CTL_origin.png)
